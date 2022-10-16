@@ -5462,6 +5462,85 @@ the user enter missing field manually."
       (set-process-sentinel rtags-install-process 'rtags-install-process-sentinel)
       (set-process-filter rtags-install-process 'rtags-install-process-filter))))
 
+
+(defun rtags-capf--annotation (str)
+  (concat " " (get-text-property 0 'signature str)))
+
+(defun rtags-capf--company-kind (str)
+  (let ((type (get-text-property 0 'type str)))
+    (cond
+     ((equal type "CXXConstructor") 'constructor)
+     ((equal type "CXXDestructor") 'method)
+     ((equal type "CXXMethod") 'method)
+     ((equal type "ClassDecl") 'class)
+     ((equal type "ClassTemplate") 'class)
+     ((equal type "EnumConstantDecl") 'enummember)
+     ((equal type "EnumDecl") 'enum)
+     ((equal type "FieldDecl") 'field)
+     ((equal type "FunctionDecl") 'function)
+     ((equal type "FunctionTemplate") 'function)
+     ((equal type "Namespace") 'unit)
+     ((equal type "ParmDecl") 'param)
+     ((equal type "StructDecl") 'struct)
+     ((equal type "TypeAliasTemplateDecl") 'typeparameter)
+     ((equal type "TypedefDecl") 'typeparameter)
+     ((equal type "VarDecl") 'variable)
+     ((equal type "macro definition")
+      (if (string-search "(" (get-text-property 0 'signature str))
+          'macro
+        'constant))
+     ((string-search "/" str) 'folder)
+     ((or (string-search "\"" str)
+          (string-search ">" str)) 'file)
+     (t 'keyword))))
+
+(defun rtags-capf--company-docsig (str)
+  (concat (get-text-property 0 'signature str)
+          "\n\n"
+          (get-text-property 0 'brief str)))
+
+(defvar rtags-capf-properties
+  (list :exclusive 'no
+        :annotation-function #'rtags-capf--annotation
+        :company-kind #'rtags-capf--company-kind
+        :company-docsig #'rtags-capf--company-docsig)
+  "Properties to return from `rtags-completion-at-point-function'")
+
+(defun rtags-capf--completions (prefix)
+  (let* ((loc (rtags-current-location))
+         (buf (current-buffer)))
+    (with-temp-buffer
+      (ignore-errors
+        (rtags-call-rc :path (buffer-file-name buf)
+                       :unsaved (and (buffer-modified-p buf) buf)
+                       "--code-complete-at" loc "--synchronous-completions" "--elisp"
+                       "--code-complete-prefix" (or prefix ""))
+        (goto-char 0)
+        (when-let ((data (eval (read (current-buffer)))))
+          (and (eq (car data) 'completions)
+               (mapcar #'(lambda (elem)
+                           (propertize (car elem)
+                                       'signature (nth 1 elem)
+                                       'type (nth 2 elem)
+                                       'brief (nth 3 elem)))
+                       (cadadr data))))))))
+
+;;;###autoload
+(defun rtags-completion-at-point-function ()
+  "Function used for `completion-at-point-functions'"
+  (when c-buffer-is-cc-mode
+    (let ((bounds (bounds-of-thing-at-point 'symbol))
+          beg end)
+      (if bounds
+          (setq beg (car bounds)
+                end (cdr bounds))
+        (setq beg (point)
+              end (point)))
+      `(,beg
+        ,end
+        ,(completion-table-with-cache #'rtags-capf--completions)
+        ,@rtags-capf-properties))))
+
 (defun rtags--error (type &rest error-args)
   "Call `rtags-error-message-function' with `type' to get the
 format string for `error' and call it with ERROR-ARGS"
